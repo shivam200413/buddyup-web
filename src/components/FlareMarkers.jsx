@@ -5,33 +5,32 @@ import { getActivity } from '../lib/supabase'
 
 function createFlareIcon(activity, pending = false) {
   const a = getActivity(activity)
+  const op = pending ? '0.5' : '1'
   return L.divIcon({
     className: '',
     html: `
-      <div style="
-        position: relative;
-        width: 44px; height: 44px;
-        display: flex; align-items: center; justify-content: center;
-      ">
+      <div style="position:relative;width:52px;height:52px;display:flex;align-items:center;justify-content:center;">
         <div style="
-          position: absolute; inset: 0; border-radius: 50%;
-          background: ${a.color}22;
-          border: 2px solid ${a.color}${pending ? '66' : 'cc'};
-          animation: pulse-ring 2s ease-out infinite;
+          position:absolute;inset:0;border-radius:50%;
+          background:${a.color}18;
+          border:2px solid ${a.color}55;
+          animation:pulse-ring 2.8s ease-out infinite;
         "></div>
         <div style="
-          width: 34px; height: 34px; border-radius: 50%;
-          background: ${a.color}33;
-          border: 2px solid ${a.color}${pending ? '44' : '99'};
-          display: flex; align-items: center; justify-content: center;
-          font-size: 16px;
-          opacity: ${pending ? 0.5 : 1};
+          width:40px;height:40px;border-radius:50%;
+          background:linear-gradient(135deg,${a.color}30,${a.color}18);
+          border:2px solid ${a.color}cc;
+          display:flex;align-items:center;justify-content:center;
+          font-size:18px;
+          box-shadow:0 2px 12px ${a.color}44;
+          opacity:${op};
+          position:relative;z-index:1;
         ">${a.emoji}</div>
       </div>
     `,
-    iconSize: [44, 44],
-    iconAnchor: [22, 22],
-    popupAnchor: [0, -24]
+    iconSize: [52, 52],
+    iconAnchor: [26, 26],
+    popupAnchor: [0, -28]
   })
 }
 
@@ -50,51 +49,46 @@ export default function FlareMarkers() {
     let lat, lng
     try {
       const geo = JSON.parse(flare.geojson)
-      lng = geo.coordinates[0]
-      lat = geo.coordinates[1]
+      lng = geo.coordinates[0]; lat = geo.coordinates[1]
     } catch { return null }
 
-    const activity = getActivity(flare.activity_type)
+    const a = getActivity(flare.activity_type)
 
     return (
       <Marker
         key={flare.id}
         position={[lat, lng]}
         icon={createFlareIcon(flare.activity_type, flare._pending)}
+        zIndexOffset={100}
         eventHandlers={{ click: () => setSelectedFlare(flare) }}
       >
         <Popup>
-          <div style={{ minWidth: 160, fontFamily: 'var(--font)' }}>
-            <div style={{ fontSize: 20, marginBottom: 4 }}>{activity.emoji}</div>
-            <div style={{ fontWeight: 700, fontSize: 14, color: activity.color }}>
-              {activity.label}
-            </div>
-            {flare.description && (
-              <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 4 }}>
-                {flare.description}
+          <div style={{ minWidth: 170, fontFamily: 'var(--font)' }}>
+            <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8 }}>
+              <span style={{ fontSize:22 }}>{a.emoji}</span>
+              <div>
+                <div style={{ fontWeight:700, fontSize:14, color:a.color }}>{a.label}</div>
+                {flare.description && (
+                  <div style={{ fontSize:12, color:'var(--text2)', marginTop:1 }}>{flare.description}</div>
+                )}
               </div>
-            )}
-            <div style={{
-              fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text3)',
-              marginTop: 8, display: 'flex', gap: 10
-            }}>
+            </div>
+            <div style={{ display:'flex', gap:8, fontSize:11, fontFamily:'var(--mono)', color:'var(--text3)', marginBottom:10 }}>
               <span>👥 {flare.participant_count}</span>
               <span>⏱ {timeLeft(flare.expires_at)}</span>
-              {flare.distance_meters != null && (
-                <span>📍 {Math.round(flare.distance_meters)}m</span>
-              )}
+              {flare.distance_meters != null && <span>📍 {Math.round(flare.distance_meters)}m</span>}
             </div>
             {!flare._pending && (
               <button
                 onClick={() => setSelectedFlare(flare)}
                 style={{
-                  marginTop: 10, width: '100%', padding: '6px 0',
-                  background: activity.color, border: 'none', borderRadius: 6,
-                  color: '#030712', fontWeight: 700, fontSize: 12,
-                  cursor: 'pointer', fontFamily: 'var(--font)'
+                  width:'100%', padding:'7px 0',
+                  background:a.color, border:'none', borderRadius:8,
+                  color:'#030712', fontWeight:700, fontSize:12,
+                  cursor:'pointer', fontFamily:'var(--font)'
                 }}
               >
-                Join →
+                View details →
               </button>
             )}
           </div>

@@ -25,20 +25,38 @@ function MapController({ position }) {
   return null
 }
 
+function RecenterControl({ position }) {
+  const map = useMap()
+  return (
+    <button
+      onClick={() => position && map.setView([position.lat, position.lng], 15, { animate: true })}
+      title="Recenter"
+      style={{
+        position: 'absolute', bottom: 88, right: 14, zIndex: 999,
+        width: 40, height: 40, borderRadius: 10,
+        background: 'var(--bg2)', border: '1px solid var(--border2)',
+        color: 'var(--text)', fontSize: 17, cursor: 'pointer',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        boxShadow: '0 2px 12px rgba(0,0,0,0.4)', transition: 'all 0.15s'
+      }}
+    >
+      ◎
+    </button>
+  )
+}
+
 export default function MapPage() {
   const {
-    startSession, stopSession,
-    position, locationError,
-    profile, nearbyUsers, flares,
-    conversations, activeChatFlareId
+    startSession, stopSession, position, locationError,
+    nearbyUsers, flares, conversations, activeChatFlareId, profile
   } = useStore()
 
   const [showDropSheet, setShowDropSheet] = useState(false)
-  const [showChatbot, setShowChatbot] = useState(false)
-  const [appState, setAppState] = useState('active')
+  const [showChatbot, setShowChatbot]     = useState(false)
+  const [appState, setAppState]           = useState('active')
+  const [activeNav, setActiveNav]         = useState('map')
 
-  // Count total unread DMs
-  const totalUnread = Object.values(conversations).reduce((sum, c) => sum + (c.unread || 0), 0)
+  const totalUnread = Object.values(conversations).reduce((s, c) => s + (c.unread || 0), 0)
 
   useEffect(() => {
     startSession()
@@ -47,26 +65,43 @@ export default function MapPage() {
       else { startSession(); setAppState('active') }
     }
     document.addEventListener('visibilitychange', handleVisibility)
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibility)
-      stopSession()
-    }
+    return () => { document.removeEventListener('visibilitychange', handleVisibility); stopSession() }
   }, [])
+
+  const openMessages = () => {
+    const convs = Object.values(conversations)
+    if (convs.length > 0) {
+      useStore.getState().openChat(convs[convs.length - 1].flare)
+    } else {
+      alert('Tap a flare on the map then press "Chat" to start a conversation.')
+    }
+  }
+
+  const zoomToFlares = () => {
+    if (!flares.length) return
+    try {
+      const map = document.querySelector('.leaflet-container')?._leaflet_map
+      if (!map) return
+      const coords = flares.map(f => { const g = JSON.parse(f.geojson); return [g.coordinates[1], g.coordinates[0]] })
+      coords.length === 1
+        ? map.setView(coords[0], 15, { animate: true })
+        : map.fitBounds(coords, { padding: [70, 70], animate: true })
+    } catch {}
+  }
 
   return (
     <div style={{ height: '100%', width: '100%', position: 'relative', overflow: 'hidden' }}>
 
-      {/* ── Map ──────────────────────────────────────────────────────────── */}
+      {/* Map */}
       <MapContainer
         center={[26.1445, 91.7362]}
         zoom={13}
         style={{ height: '100%', width: '100%' }}
-        zoomControl={true}
+        zoomControl={false}
         attributionControl={false}
       >
         <TileLayer
           url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-          attribution='&copy; OpenStreetMap &copy; CARTO'
           maxZoom={19}
         />
         <MapController position={position} />
@@ -74,163 +109,135 @@ export default function MapPage() {
         <FlareMarkers />
         <BuddyMarkers />
         <RouteOverlay />
+        {position && <RecenterControl position={position} />}
       </MapContainer>
 
-      {/* ── UI Overlays ───────────────────────────────────────────────────── */}
+      {/* Top bar */}
       <TopBar nearbyCount={nearbyUsers.length} flareCount={flares.length} />
+
+      {/* Route info card */}
       <RouteCard />
+
+      {/* Radar live indicator */}
       <RadarPulse active={appState === 'active'} />
 
       {/* Location error */}
       {locationError && (
         <div style={{
-          position: 'absolute', top: 70, left: '50%', transform: 'translateX(-50%)',
-          background: '#7f1d1d', border: '1px solid #ef4444', borderRadius: 8,
-          padding: '8px 16px', fontSize: 12, fontFamily: 'var(--mono)',
-          color: '#fca5a5', zIndex: 1000, whiteSpace: 'nowrap'
+          position: 'absolute', top: 68, left: '50%', transform: 'translateX(-50%)',
+          background: 'rgba(127,29,29,0.95)', border: '1px solid #ef4444',
+          borderRadius: 10, padding: '8px 16px', fontSize: 12,
+          fontFamily: 'var(--mono)', color: '#fca5a5', zIndex: 1000,
+          whiteSpace: 'nowrap', boxShadow: '0 4px 16px rgba(0,0,0,0.4)'
         }}>
-          ⚠ {locationError} — allow location access
+          ⚠ {locationError} — allow location access in browser
         </div>
       )}
 
-      {/* Background mode */}
+      {/* Backgrounded overlay */}
       {appState === 'paused' && (
         <div style={{
-          position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-          background: 'rgba(8,13,20,0.92)', display: 'flex', flexDirection: 'column',
-          alignItems: 'center', justifyContent: 'center', zIndex: 2000, gap: 12
+          position: 'absolute', inset: 0,
+          background: 'rgba(8,13,20,0.94)',
+          display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center',
+          zIndex: 2000, gap: 14
         }}>
-          <div style={{ fontSize: 32 }}>👻</div>
-          <div style={{ fontSize: 18, fontWeight: 700 }}>You're invisible</div>
-          <div style={{ fontSize: 13, color: 'var(--text3)', fontFamily: 'var(--mono)', textAlign: 'center', maxWidth: 260 }}>
-            app is in background · you've left the radar
+          <div style={{ fontSize: 40 }}>👻</div>
+          <div style={{ fontSize: 20, fontWeight: 800 }}>You're invisible</div>
+          <div style={{
+            fontSize: 13, color: 'var(--text3)', fontFamily: 'var(--mono)',
+            textAlign: 'center', maxWidth: 240, lineHeight: 1.7
+          }}>
+            app is in background<br />you've left the radar
           </div>
         </div>
       )}
 
-      {/* ── Bottom Navigation Bar ─────────────────────────────────────────── */}
-      <div style={{
+      {/* ── Bottom Navigation Bar ──────────────────────────────────────────── */}
+      <nav style={{
         position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 999,
-        background: 'var(--bg2)', borderTop: '1px solid var(--border)',
-        display: 'flex', alignItems: 'center', padding: '8px 16px 20px',
-        gap: 8
+        height: 'var(--nav-h)',
+        background: 'var(--bg2)',
+        borderTop: '1px solid var(--border2)',
+        display: 'flex', alignItems: 'center',
+        padding: '0 8px 8px',
+        boxShadow: '0 -4px 24px rgba(0,0,0,0.5)'
       }}>
-        {/* Recenter */}
-        <NavBtn
-          icon="◎"
-          label="Recenter"
+        <NavBtn icon="◎"  label="Recenter" active={false}
           onClick={() => {
-            if (position) {
-              const map = document.querySelector('.leaflet-container')?._leaflet_map
-              if (map) map.setView([position.lat, position.lng], 15, { animate: true })
-            }
+            const map = document.querySelector('.leaflet-container')?._leaflet_map
+            if (map && position) map.setView([position.lat, position.lng], 15, { animate: true })
           }}
         />
-
-        {/* Chatbot */}
-        <NavBtn
-          icon="🤖"
-          label="BuddyBot"
-          onClick={() => setShowChatbot(true)}
-          active={showChatbot}
+        <NavBtn icon="🤖" label="BuddyBot" active={showChatbot}
+          onClick={() => { setShowChatbot(true) }}
         />
 
-        {/* Drop Flare — centre, prominent */}
+        {/* Centre FAB */}
         <button
           onClick={() => setShowDropSheet(true)}
           style={{
-            flex: '0 0 auto', width: 56, height: 56, borderRadius: '50%',
-            background: 'var(--accent)', border: 'none',
-            fontSize: 22, cursor: 'pointer',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            boxShadow: '0 0 0 0 rgba(56,189,248,0.4)',
+            flex: '0 0 auto', width: 58, height: 58,
+            borderRadius: '50%', background: 'var(--accent)',
+            border: '3px solid var(--bg2)', fontSize: 24,
+            cursor: 'pointer', display: 'flex', alignItems: 'center',
+            justifyContent: 'center', margin: '0 6px',
             animation: 'fab-pulse 2.5s ease infinite',
-            margin: '0 4px'
+            boxShadow: '0 4px 20px rgba(56,189,248,0.5)',
+            flexShrink: 0
           }}
           title="Drop a Flare"
         >
           🔥
         </button>
 
-        {/* Messages */}
-        <NavBtn
-          icon="💬"
-          label="Messages"
-          badge={totalUnread > 0 ? totalUnread : null}
-          onClick={() => {
-            // Open most recent conversation or prompt user to join a flare
-            const convs = Object.values(conversations)
-            if (convs.length > 0) {
-              useStore.getState().openChat(convs[convs.length - 1].flare)
-            } else {
-              alert('Tap a flare on the map and press "Chat" to start a conversation!')
-            }
-          }}
-          active={!!activeChatFlareId}
+        <NavBtn icon="💬" label="Messages" active={!!activeChatFlareId}
+          badge={totalUnread || null}
+          onClick={openMessages}
         />
-
-        {/* Flares list shortcut */}
-        <NavBtn
-          icon="📋"
-          label="Flares"
-          badge={flares.length > 0 ? flares.length : null}
-          onClick={() => {
-            // Zoom map to show all flares
-            const map = document.querySelector('.leaflet-container')?._leaflet_map
-            if (map && flares.length > 0) {
-              try {
-                const coords = flares.map(f => {
-                  const g = JSON.parse(f.geojson)
-                  return [g.coordinates[1], g.coordinates[0]]
-                })
-                if (coords.length === 1) map.setView(coords[0], 15, { animate: true })
-                else map.fitBounds(coords, { padding: [60, 60], animate: true })
-              } catch {}
-            }
-          }}
+        <NavBtn icon="📋" label="Flares" active={false}
+          badge={flares.length || null}
+          onClick={zoomToFlares}
         />
-      </div>
+      </nav>
 
-      {/* ── Sheets & Modals ───────────────────────────────────────────────── */}
-      {showDropSheet && <DropFlareSheet onClose={() => setShowDropSheet(false)} />}
+      {/* Sheets */}
+      {showDropSheet  && <DropFlareSheet onClose={() => setShowDropSheet(false)} />}
       <FlareDetailSheet />
       {activeChatFlareId && <ChatWindow />}
-      {showChatbot && <ChatbotPage onClose={() => setShowChatbot(false)} />}
-
-      <style>{`
-        @keyframes fab-pulse {
-          0%, 100% { box-shadow: 0 0 0 0 rgba(56,189,248,0.4); }
-          50%       { box-shadow: 0 0 0 10px rgba(56,189,248,0); }
-        }
-      `}</style>
+      {showChatbot    && <ChatbotPage onClose={() => setShowChatbot(false)} />}
     </div>
   )
 }
 
 function NavBtn({ icon, label, badge, onClick, active }) {
   return (
-    <button
-      onClick={onClick}
-      style={{
-        flex: 1, height: 48, borderRadius: 12, cursor: 'pointer',
-        background: active ? 'rgba(56,189,248,0.1)' : 'transparent',
-        border: active ? '1px solid rgba(56,189,248,0.3)' : '1px solid transparent',
-        display: 'flex', flexDirection: 'column', alignItems: 'center',
-        justifyContent: 'center', gap: 2, position: 'relative',
-        transition: 'all 0.15s'
-      }}
-    >
-      <span style={{ fontSize: 18 }}>{icon}</span>
-      <span style={{ fontSize: 9, color: active ? 'var(--accent)' : 'var(--text3)', fontFamily: 'var(--mono)' }}>
+    <button onClick={onClick} style={{
+      flex: 1, height: 52, borderRadius: 12,
+      cursor: 'pointer', position: 'relative',
+      background: active ? 'rgba(56,189,248,0.12)' : 'transparent',
+      border: active ? '1px solid rgba(56,189,248,0.25)' : '1px solid transparent',
+      display: 'flex', flexDirection: 'column',
+      alignItems: 'center', justifyContent: 'center', gap: 3,
+      transition: 'all 0.15s'
+    }}>
+      <span style={{ fontSize: 20, lineHeight: 1 }}>{icon}</span>
+      <span style={{
+        fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 500,
+        color: active ? 'var(--accent)' : 'var(--text2)',
+        letterSpacing: '0.3px'
+      }}>
         {label}
       </span>
       {badge && (
         <div style={{
-          position: 'absolute', top: 6, right: 8,
+          position: 'absolute', top: 7, right: 10,
           background: 'var(--red)', color: 'white',
-          borderRadius: '50%', width: 16, height: 16,
+          borderRadius: '50%', width: 17, height: 17,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: 10, fontWeight: 700, fontFamily: 'var(--mono)'
+          fontSize: 10, fontWeight: 700, fontFamily: 'var(--mono)',
+          border: '2px solid var(--bg2)'
         }}>
           {badge > 9 ? '9+' : badge}
         </div>
