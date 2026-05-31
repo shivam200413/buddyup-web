@@ -1,239 +1,289 @@
 import { useState } from 'react'
 import { useStore } from '../lib/store'
 
-const s = {
-  page: {
-    height: '100%', display: 'flex', flexDirection: 'column',
-    alignItems: 'center', justifyContent: 'center',
-    background: 'var(--bg)', padding: 24, gap: 0
-  },
-  logo: {
-    fontSize: 40, fontWeight: 800, letterSpacing: '-2px',
-    color: 'var(--text)', marginBottom: 8
-  },
-  sub: {
-    fontSize: 14, color: 'var(--text3)', fontFamily: 'var(--mono)',
-    marginBottom: 48, textAlign: 'center'
-  },
-  card: {
-    width: '100%', maxWidth: 360,
-    background: 'var(--bg2)', border: '1px solid var(--border)',
-    borderRadius: 16, padding: 28,
-    animation: 'fadeUp 0.4s ease both'
-  },
-  label: { fontSize: 13, color: 'var(--text2)', marginBottom: 8, display: 'block' },
-  input: {
-    width: '100%', background: 'var(--bg3)',
-    border: '1px solid var(--border2)', borderRadius: 8,
-    color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 15,
-    padding: '10px 14px', outline: 'none', marginBottom: 16,
-    transition: 'border-color 0.2s', boxSizing: 'border-box'
-  },
-  btn: {
-    width: '100%', padding: '11px 0',
-    background: 'var(--accent)', color: '#030712',
-    border: 'none', borderRadius: 8, fontFamily: 'var(--font)',
-    fontWeight: 700, fontSize: 14, cursor: 'pointer',
-    transition: 'opacity 0.2s', marginBottom: 0
-  },
-  btnGhost: {
-    width: '100%', padding: '11px 0',
-    background: 'var(--bg3)', color: 'var(--text2)',
-    border: '1px solid var(--border2)', borderRadius: 8,
-    fontFamily: 'var(--font)', fontWeight: 600, fontSize: 14,
-    cursor: 'pointer', marginTop: 8
-  },
-  err: {
-    fontSize: 12, color: 'var(--red)', marginTop: 12,
-    fontFamily: 'var(--mono)', textAlign: 'center'
-  },
-  step: {
-    fontSize: 12, color: 'var(--text3)', fontFamily: 'var(--mono)', marginBottom: 20
-  },
-  successBox: {
-    background: 'rgba(74,222,128,0.08)', border: '1px solid rgba(74,222,128,0.3)',
-    borderRadius: 10, padding: '16px', textAlign: 'center'
-  }
-}
-
 export default function AuthPage() {
-  // modes: 'choose' | 'magic' | 'magic-sent' | 'signin' | 'signup' | 'signup-confirm'
-  const [step, setStep] = useState('choose')
+  const [mode, setMode] = useState('signin')   // 'signin' | 'signup'
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [showPass, setShowPass] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
 
-  const { sendMagicLink, signInWithPassword, signUpWithPassword } = useStore()
+  const { signInWithPassword, signUpWithPassword } = useStore()
 
-  const reset = (newStep) => { setError(''); setStep(newStep) }
-
-  // ── Magic link ────────────────────────────────────────────────────────────
-  const handleMagicLink = async () => {
-    if (!email.includes('@')) { setError('Enter a valid email address'); return }
-    setLoading(true); setError('')
-    const { error } = await sendMagicLink(email)
-    setLoading(false)
-    if (error) setError(error.message)
-    else setStep('magic-sent')
+  const switchMode = (m) => {
+    setMode(m); setError(''); setSuccess('')
+    setPassword(''); setConfirm('')
   }
 
-  // ── Password sign in ──────────────────────────────────────────────────────
-  const handleSignIn = async () => {
-    if (!email.includes('@')) { setError('Enter a valid email'); return }
-    if (password.length < 6) { setError('Password must be at least 6 characters'); return }
-    setLoading(true); setError('')
-    const { error } = await signInWithPassword(email, password)
-    setLoading(false)
-    // On success, onAuthStateChange in store handles navigation automatically
-    if (error) setError(error.message)
+  const validate = () => {
+    if (!email.match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)) return 'Enter a valid email address'
+    if (password.length < 6) return 'Password must be at least 6 characters'
+    if (mode === 'signup' && password !== confirm) return 'Passwords do not match'
+    return null
   }
 
-  // ── Password sign up ──────────────────────────────────────────────────────
-  const handleSignUp = async () => {
-    if (!email.includes('@')) { setError('Enter a valid email'); return }
-    if (password.length < 6) { setError('Password must be at least 6 characters'); return }
-    setLoading(true); setError('')
-    const { data, error } = await signUpWithPassword(email, password)
-    setLoading(false)
-    if (error) { setError(error.message); return }
+  const handleSubmit = async () => {
+    const err = validate()
+    if (err) { setError(err); return }
+    setLoading(true); setError(''); setSuccess('')
 
-    // If Supabase email confirmations are ON → show confirm screen
-    // If confirmations are OFF → session is created immediately → onAuthStateChange handles it
-    if (data?.session) {
-      // Confirmation disabled — session exists, ProfileSetup will show automatically
-      return
+    if (mode === 'signin') {
+      const { error } = await signInWithPassword(email, password)
+      setLoading(false)
+      if (error) {
+        if (error.message.includes('Invalid login credentials'))
+          setError('Wrong email or password.')
+        else
+          setError(error.message)
+      }
+      // success → onAuthStateChange fires → App re-renders to MapPage automatically
+    } else {
+      const { data, error } = await signUpWithPassword(email, password)
+      setLoading(false)
+      if (error) {
+        if (error.message.includes('already registered'))
+          setError('An account with this email already exists. Sign in instead.')
+        else
+          setError(error.message)
+        return
+      }
+      if (data?.session) {
+        // Email confirmations are OFF — session exists, ProfileSetup shows automatically
+        return
+      }
+      // Email confirmations are ON — tell user to check inbox
+      setSuccess(`Confirmation email sent to ${email}. Click the link, then sign in here.`)
+      switchMode('signin')
     }
-    // Confirmation enabled — user needs to click email link
-    setStep('signup-confirm')
+  }
+
+  const handleKey = (e) => {
+    if (e.key === 'Enter') handleSubmit()
+  }
+
+  const inp = {
+    width: '100%', background: '#111827',
+    border: '1px solid rgba(255,255,255,0.1)',
+    borderRadius: 10, color: '#f1f5f9',
+    fontSize: 15, padding: '12px 14px',
+    outline: 'none', boxSizing: 'border-box',
+    fontFamily: 'inherit', transition: 'border-color 0.2s'
   }
 
   return (
-    <div style={s.page}>
-      <div style={s.logo}>BuddyUp</div>
-      <div style={s.sub}>find people nearby · right now · no feed · no followers</div>
+    <div style={{
+      minHeight: '100%', display: 'flex', flexDirection: 'column',
+      alignItems: 'center', justifyContent: 'center',
+      background: '#080d14', padding: '24px 20px'
+    }}>
 
-      <div style={s.card}>
-
-        {/* ── Choose method ──────────────────────────────────────────────── */}
-        {step === 'choose' && (
-          <>
-            <div style={s.step}>sign in or create account</div>
-            <button style={s.btn} onClick={() => reset('magic')}>
-              ✉ Continue with Magic Link
-            </button>
-            <button style={s.btnGhost} onClick={() => reset('signin')}>
-              🔑 Sign in with Password
-            </button>
-            <button style={s.btnGhost} onClick={() => reset('signup')}>
-              ✨ Create New Account
-            </button>
-          </>
-        )}
-
-        {/* ── Magic link entry ───────────────────────────────────────────── */}
-        {step === 'magic' && (
-          <>
-            <div style={s.step}>magic link — no password needed</div>
-            <label style={s.label}>Email</label>
-            <input
-              style={s.input} type="email" value={email}
-              onChange={e => setEmail(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && handleMagicLink()}
-              placeholder="you@example.com" autoComplete="email"
-            />
-            <button style={s.btn} onClick={handleMagicLink} disabled={loading}>
-              {loading ? 'Sending...' : '✉ Send Magic Link →'}
-            </button>
-            <button style={s.btnGhost} onClick={() => reset('choose')}>← Back</button>
-          </>
-        )}
-
-        {/* ── Magic link sent ────────────────────────────────────────────── */}
-        {step === 'magic-sent' && (
-          <div style={s.successBox}>
-            <div style={{ fontSize: 32, marginBottom: 10 }}>📬</div>
-            <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>Check your inbox</div>
-            <div style={{ fontSize: 12, color: 'var(--text2)', fontFamily: 'var(--mono)', lineHeight: 1.7 }}>
-              We sent a login link to<br />
-              <span style={{ color: 'var(--accent)' }}>{email}</span><br /><br />
-              Click the link in the email — it will open BuddyUp and log you in automatically.
-            </div>
-            <button style={{ ...s.btnGhost, marginTop: 16 }} onClick={() => reset('choose')}>
-              ← Use a different method
-            </button>
-          </div>
-        )}
-
-        {/* ── Sign in ────────────────────────────────────────────────────── */}
-        {step === 'signin' && (
-          <>
-            <div style={s.step}>sign in to your account</div>
-            <label style={s.label}>Email</label>
-            <input
-              style={s.input} type="email" value={email}
-              onChange={e => setEmail(e.target.value)}
-              placeholder="you@example.com" autoComplete="email"
-            />
-            <label style={s.label}>Password</label>
-            <input
-              style={s.input} type="password" value={password}
-              onChange={e => setPassword(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && handleSignIn()}
-              placeholder="••••••••" autoComplete="current-password"
-            />
-            <button style={s.btn} onClick={handleSignIn} disabled={loading}>
-              {loading ? 'Signing in...' : 'Sign In →'}
-            </button>
-            <button style={s.btnGhost} onClick={() => reset('choose')}>← Back</button>
-          </>
-        )}
-
-        {/* ── Sign up ────────────────────────────────────────────────────── */}
-        {step === 'signup' && (
-          <>
-            <div style={s.step}>create a new account</div>
-            <label style={s.label}>Email</label>
-            <input
-              style={s.input} type="email" value={email}
-              onChange={e => setEmail(e.target.value)}
-              placeholder="you@example.com" autoComplete="email"
-            />
-            <label style={s.label}>Password</label>
-            <input
-              style={s.input} type="password" value={password}
-              onChange={e => setPassword(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && handleSignUp()}
-              placeholder="min 6 characters" autoComplete="new-password"
-            />
-            <button style={s.btn} onClick={handleSignUp} disabled={loading}>
-              {loading ? 'Creating account...' : 'Create Account →'}
-            </button>
-            <button style={s.btnGhost} onClick={() => reset('choose')}>← Back</button>
-          </>
-        )}
-
-        {/* ── Signup confirm email ───────────────────────────────────────── */}
-        {step === 'signup-confirm' && (
-          <div style={s.successBox}>
-            <div style={{ fontSize: 32, marginBottom: 10 }}>📩</div>
-            <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>Confirm your email</div>
-            <div style={{ fontSize: 12, color: 'var(--text2)', fontFamily: 'var(--mono)', lineHeight: 1.7 }}>
-              We sent a confirmation link to<br />
-              <span style={{ color: 'var(--accent)' }}>{email}</span><br /><br />
-              Click the link in the email to activate your account, then come back here and sign in.
-            </div>
-            <button style={{ ...s.btn, marginTop: 16 }} onClick={() => reset('signin')}>
-              → Go to Sign In
-            </button>
-          </div>
-        )}
-
-        {error && <div style={s.err}>{error}</div>}
+      {/* Logo */}
+      <div style={{ textAlign: 'center', marginBottom: 36 }}>
+        <div style={{
+          fontSize: 42, fontWeight: 800, letterSpacing: '-2px',
+          color: '#f1f5f9', marginBottom: 10, lineHeight: 1
+        }}>
+          BuddyUp
+        </div>
+        <div style={{
+          fontSize: 13, color: '#475569',
+          fontFamily: 'monospace', lineHeight: 1.6
+        }}>
+          find people nearby · right now · no feed · no followers
+        </div>
       </div>
 
-      <div style={{ marginTop: 32, fontSize: 11, color: 'var(--text3)', fontFamily: 'var(--mono)', textAlign: 'center' }}>
-        you disappear when you close the app · no tracking · no history
+      {/* Card */}
+      <div style={{
+        width: '100%', maxWidth: 380,
+        background: '#0f1f35',
+        border: '1px solid rgba(255,255,255,0.08)',
+        borderRadius: 18, overflow: 'hidden'
+      }}>
+
+        {/* Tab switcher */}
+        <div style={{
+          display: 'flex', borderBottom: '1px solid rgba(255,255,255,0.08)'
+        }}>
+          {['signin', 'signup'].map(m => (
+            <button key={m}
+              onClick={() => switchMode(m)}
+              style={{
+                flex: 1, padding: '14px 0', border: 'none', cursor: 'pointer',
+                fontSize: 14, fontWeight: 600, fontFamily: 'inherit',
+                background: mode === m ? '#0f1f35' : '#0a1628',
+                color: mode === m ? '#38bdf8' : '#475569',
+                borderBottom: mode === m ? '2px solid #38bdf8' : '2px solid transparent',
+                transition: 'all 0.15s'
+              }}>
+              {m === 'signin' ? 'Sign In' : 'Create Account'}
+            </button>
+          ))}
+        </div>
+
+        {/* Form body */}
+        <div style={{ padding: '24px 24px 28px' }}>
+
+          {/* Success message */}
+          {success && (
+            <div style={{
+              background: 'rgba(74,222,128,0.08)',
+              border: '1px solid rgba(74,222,128,0.25)',
+              borderRadius: 10, padding: '12px 14px',
+              fontSize: 13, color: '#4ade80', marginBottom: 20,
+              lineHeight: 1.55, fontFamily: 'monospace'
+            }}>
+              ✓ {success}
+            </div>
+          )}
+
+          {/* Email */}
+          <div style={{ marginBottom: 14 }}>
+            <label style={{
+              display: 'block', fontSize: 12, color: '#64748b',
+              marginBottom: 7, fontFamily: 'monospace'
+            }}>
+              Email address
+            </label>
+            <input
+              style={inp}
+              type="email" value={email}
+              onChange={e => { setEmail(e.target.value); setError('') }}
+              onKeyDown={handleKey}
+              placeholder="you@example.com"
+              autoComplete="email"
+              autoFocus
+            />
+          </div>
+
+          {/* Password */}
+          <div style={{ marginBottom: mode === 'signup' ? 14 : 22, position: 'relative' }}>
+            <label style={{
+              display: 'block', fontSize: 12, color: '#64748b',
+              marginBottom: 7, fontFamily: 'monospace'
+            }}>
+              Password {mode === 'signup' && <span style={{ color: '#334155' }}>— min 6 characters</span>}
+            </label>
+            <div style={{ position: 'relative' }}>
+              <input
+                style={{ ...inp, paddingRight: 44 }}
+                type={showPass ? 'text' : 'password'} value={password}
+                onChange={e => { setPassword(e.target.value); setError('') }}
+                onKeyDown={handleKey}
+                placeholder="••••••••"
+                autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+              />
+              <button
+                onClick={() => setShowPass(v => !v)}
+                style={{
+                  position: 'absolute', right: 12, top: '50%',
+                  transform: 'translateY(-50%)',
+                  background: 'none', border: 'none', cursor: 'pointer',
+                  color: '#475569', fontSize: 14, padding: 2
+                }}
+                tabIndex={-1}
+              >
+                {showPass ? '🙈' : '👁'}
+              </button>
+            </div>
+          </div>
+
+          {/* Confirm password — only on signup */}
+          {mode === 'signup' && (
+            <div style={{ marginBottom: 22 }}>
+              <label style={{
+                display: 'block', fontSize: 12, color: '#64748b',
+                marginBottom: 7, fontFamily: 'monospace'
+              }}>
+                Confirm password
+              </label>
+              <input
+                style={{
+                  ...inp,
+                  borderColor: confirm && confirm !== password
+                    ? 'rgba(248,113,113,0.5)' : inp.border
+                }}
+                type={showPass ? 'text' : 'password'} value={confirm}
+                onChange={e => { setConfirm(e.target.value); setError('') }}
+                onKeyDown={handleKey}
+                placeholder="••••••••"
+                autoComplete="new-password"
+              />
+              {confirm && confirm !== password && (
+                <div style={{ fontSize: 11, color: '#f87171', marginTop: 5, fontFamily: 'monospace' }}>
+                  Passwords don't match
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Error */}
+          {error && (
+            <div style={{
+              background: 'rgba(248,113,113,0.08)',
+              border: '1px solid rgba(248,113,113,0.2)',
+              borderRadius: 8, padding: '10px 12px',
+              fontSize: 12, color: '#f87171',
+              marginBottom: 16, fontFamily: 'monospace', lineHeight: 1.5
+            }}>
+              {error}
+            </div>
+          )}
+
+          {/* Submit */}
+          <button
+            onClick={handleSubmit}
+            disabled={loading}
+            style={{
+              width: '100%', padding: '13px 0',
+              background: loading ? '#1e3a5f' : '#38bdf8',
+              color: loading ? '#475569' : '#030712',
+              border: 'none', borderRadius: 10,
+              fontFamily: 'inherit', fontWeight: 700, fontSize: 15,
+              cursor: loading ? 'not-allowed' : 'pointer',
+              transition: 'all 0.15s', letterSpacing: '0.2px'
+            }}
+          >
+            {loading
+              ? (mode === 'signin' ? 'Signing in...' : 'Creating account...')
+              : (mode === 'signin' ? 'Sign In →' : 'Create Account →')
+            }
+          </button>
+
+          {/* Divider */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 10, margin: '18px 0 0'
+          }}>
+            <div style={{ flex: 1, height: 1, background: 'rgba(255,255,255,0.06)' }} />
+            <span style={{ fontSize: 11, color: '#334155', fontFamily: 'monospace' }}>
+              {mode === 'signin' ? "don't have an account?" : 'already have an account?'}
+            </span>
+            <div style={{ flex: 1, height: 1, background: 'rgba(255,255,255,0.06)' }} />
+          </div>
+          <button
+            onClick={() => switchMode(mode === 'signin' ? 'signup' : 'signin')}
+            style={{
+              width: '100%', marginTop: 10, padding: '11px 0',
+              background: 'transparent',
+              border: '1px solid rgba(255,255,255,0.08)',
+              borderRadius: 10, color: '#64748b',
+              fontFamily: 'inherit', fontWeight: 600, fontSize: 13,
+              cursor: 'pointer', transition: 'all 0.15s'
+            }}
+          >
+            {mode === 'signin' ? 'Create a new account' : 'Sign in to existing account'}
+          </button>
+        </div>
+      </div>
+
+      <div style={{
+        marginTop: 28, fontSize: 11, color: '#1e293b',
+        fontFamily: 'monospace', textAlign: 'center', lineHeight: 1.8
+      }}>
+        you disappear when you close the app<br />no tracking · no history · no feed
       </div>
     </div>
   )

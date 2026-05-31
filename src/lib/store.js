@@ -1,15 +1,18 @@
 import { create } from 'zustand'
-import { supabase } from '../lib/supabase'
+import { supabase } from './supabase'
 import ngeohash from 'ngeohash'
 
-// ── Geohash precision 5 ≈ 4.9km × 4.9km cells ─────────────────────────────
 const GEO_PRECISION = 5
 
+// Module-level refs — never stored in Zustand state to avoid re-renders
 let presenceChannel = null
 let watchId = null
+let flareInterval = null
+let lastRouteDest = null  // { lat, lng } — used by RouteCard mode toggle
 
 export const useStore = create((set, get) => ({
-  // ── Auth ──────────────────────────────────────────────────────────────────
+
+  // ── Auth ────────────────────────────────────────────────────────────────────
   session: null,
   profile: null,
   authLoading: true,
@@ -27,63 +30,63 @@ export const useStore = create((set, get) => ({
   },
 
   fetchProfile: async (userId) => {
-    const { data } = await supabase
-      .from('users')
-      .select('*')
-      .eq('id', userId)
-      .single()
-    set({ profile: data })
+    try {
+      const { data } = await supabase
+        .from('users').select('*').eq('id', userId).single()
+      set({ profile: data || null })
+    } catch (_) {
+      set({ profile: null })
+    }
   },
 
-  // Magic link — sends email, user clicks link, session is created automatically
-  sendMagicLink: async (email) => {
-    return supabase.auth.signInWithOtp({
-      email,
-      options: { emailRedirectTo: window.location.origin }
-    })
-  },
-
-  // Email + password sign-in
   signInWithPassword: async (email, password) => {
     return supabase.auth.signInWithPassword({ email, password })
   },
 
-  // Email + password sign-up (new account)
   signUpWithPassword: async (email, password) => {
     return supabase.auth.signUp({
-      email,
-      password,
+      email, password,
       options: { emailRedirectTo: window.location.origin }
     })
   },
 
   createProfile: async (username) => {
     const { session } = get()
+    if (!session) return { error: new Error('Not authenticated') }
     const { data, error } = await supabase
       .from('users')
       .insert({ id: session.user.id, username })
-      .select()
-      .single()
+      .select().single()
     if (!error) set({ profile: data })
     return { data, error }
   },
 
   signOut: async () => {
-    await get().stopSession()
-    await supabase.auth.signOut()
-    set({ session: null, profile: null, nearbyUsers: [], flares: [] })
+    // Clear state immediately so UI responds before async work finishes
+    set({
+      session: null, profile: null,
+      nearbyUsers: [], flares: [], selectedFlare: null,
+      conversations: {}, activeChatFlareId: null,
+      activeRoute: null, routeLoading: false,
+      position: null, locationError: null, geohashCell: null
+    })
+    try { await get().stopSession() } catch (_) {}
+    try { await supabase.auth.signOut() } catch (_) {}
   },
 
-  // ── Location ──────────────────────────────────────────────────────────────
-  position: null,        // { lat, lng }
+  // ── Location ─────────────────────────────────────────────────────────────
+  position: null,
   locationError: null,
   geohashCell: null,
 
   startLocation: () => {
     if (!navigator.geolocation) {
-      set({ locationError: 'Geolocation not supported' })
+      set({ locationError: 'Geolocation not supported in this browser' })
       return
     }
+    // Don't double-start
+    if (watchId !== null) return
+
     watchId = navigator.geolocation.watchPosition(
       (pos) => {
         const lat = pos.coords.latitude
@@ -93,23 +96,30 @@ export const useStore = create((set, get) => ({
 
         set({ position: { lat, lng }, locationError: null, geohashCell: cell })
 
-        // Re-subscribe if moved to a different geohash cell
+        // Re-subscribe presence if moved to a new geohash cell
         if (cell !== prev.geohashCell && prev.session) {
           get().joinPresenceChannel(cell)
         }
 
-        // Broadcast updated position to current channel
-        if (presenceChannel) {
+        // Broadcast position update to current channel
+        if (presenceChannel && prev.session) {
           presenceChannel.track({
-            user_id: prev.session?.user?.id,
+            user_id: prev.session.user.id,
             username: prev.profile?.username || 'Anonymous',
             lat, lng,
-            activity: prev.currentActivity,
+            activity: prev.currentActivity || 'chill',
             online_at: new Date().toISOString()
-          })
+          }).catch(() => {})
         }
       },
-      (err) => set({ locationError: err.message }),
+      (err) => {
+        const msg = err.code === 1
+          ? 'Location permission denied — allow it in browser settings'
+          : err.code === 2
+          ? 'Location unavailable — check GPS signal'
+          : 'Location timed out'
+        set({ locationError: msg })
+      },
       { enableHighAccuracy: true, maximumAge: 10000, timeout: 15000 }
     )
   },
@@ -126,9 +136,9 @@ export const useStore = create((set, get) => ({
   currentActivity: 'chill',
 
   joinPresenceChannel: async (cell) => {
-    // Leave old channel first
+    // Unsubscribe old channel before joining new one
     if (presenceChannel) {
-      await presenceChannel.unsubscribe()
+      try { await presenceChannel.unsubscribe() } catch (_) {}
       presenceChannel = null
     }
 
@@ -142,8 +152,7 @@ export const useStore = create((set, get) => ({
     presenceChannel
       .on('presence', { event: 'sync' }, () => {
         const state = presenceChannel.presenceState()
-        const users = Object.values(state)
-          .flat()
+        const users = Object.values(state).flat()
           .filter(u => u.user_id !== session.user.id)
         set({ nearbyUsers: users })
       })
@@ -164,30 +173,30 @@ export const useStore = create((set, get) => ({
       })
       .subscribe(async (status) => {
         if (status === 'SUBSCRIBED') {
-          await presenceChannel.track({
-            user_id: session.user.id,
-            username: profile?.username || 'Anonymous',
-            lat: position.lat,
-            lng: position.lng,
-            activity: get().currentActivity,
-            online_at: new Date().toISOString()
-          })
+          try {
+            await presenceChannel.track({
+              user_id: session.user.id,
+              username: profile?.username || 'Anonymous',
+              lat: position.lat,
+              lng: position.lng,
+              activity: get().currentActivity || 'chill',
+              online_at: new Date().toISOString()
+            })
+          } catch (_) {}
         }
       })
   },
 
   leavePresenceChannel: async () => {
     if (presenceChannel) {
-      await presenceChannel.untrack()
-      await presenceChannel.unsubscribe()
+      try { await presenceChannel.untrack() } catch (_) {}
+      try { await presenceChannel.unsubscribe() } catch (_) {}
       presenceChannel = null
     }
     set({ nearbyUsers: [] })
   },
 
-  setCurrentActivity: (activity) => {
-    set({ currentActivity: activity })
-  },
+  setCurrentActivity: (activity) => set({ currentActivity: activity }),
 
   // ── Flares ────────────────────────────────────────────────────────────────
   flares: [],
@@ -198,22 +207,21 @@ export const useStore = create((set, get) => ({
     const { position } = get()
     if (!position) return
     set({ flaresLoading: true })
-
-    const { data, error } = await supabase.rpc('get_nearby_flares', {
-      user_lat: position.lat,
-      user_lng: position.lng,
-      radius_meters: 2000
-    })
-
-    if (!error && data) set({ flares: data })
+    try {
+      const { data, error } = await supabase.rpc('get_nearby_flares', {
+        user_lat: position.lat,
+        user_lng: position.lng,
+        radius_meters: 2000
+      })
+      if (!error && data) set({ flares: data })
+    } catch (_) {}
     set({ flaresLoading: false })
   },
 
   dropFlare: async (activityType, description) => {
     const { position, session } = get()
-    if (!position || !session) return { error: 'Not ready' }
+    if (!position || !session) return { error: { message: 'GPS not ready yet' } }
 
-    // Optimistic update
     const tempId = `temp_${Date.now()}`
     const optimistic = {
       id: tempId,
@@ -233,37 +241,31 @@ export const useStore = create((set, get) => ({
       .insert({
         host_id: session.user.id,
         activity_type: activityType,
-        description,
+        description: description || null,
         location: `POINT(${position.lng} ${position.lat})`,
         expires_at: new Date(Date.now() + 2 * 3600 * 1000).toISOString()
       })
-      .select()
-      .single()
+      .select().single()
 
     if (error) {
-      // Rollback optimistic update
       set(s => ({ flares: s.flares.filter(f => f.id !== tempId) }))
       return { error }
     }
 
-    // Replace optimistic with real
-    const confirmed = {
-      ...optimistic,
-      id: data.id,
-      _pending: false
-    }
-    set(s => ({ flares: s.flares.map(f => f.id === tempId ? confirmed : f) }))
+    set(s => ({
+      flares: s.flares.map(f =>
+        f.id === tempId ? { ...optimistic, id: data.id, _pending: false } : f
+      )
+    }))
     return { data }
   },
 
   joinFlare: async (flareId) => {
     const { session } = get()
-    if (!session) return { error: 'Not authenticated' }
-
+    if (!session) return { error: { message: 'Not authenticated' } }
     const { error } = await supabase
       .from('flare_participants')
       .insert({ flare_id: flareId, user_id: session.user.id })
-
     if (!error) {
       set(s => ({
         flares: s.flares.map(f =>
@@ -298,6 +300,7 @@ export const useStore = create((set, get) => ({
   subscribeToMessages: (flare) => {
     const { session, conversations } = get()
     if (!session || conversations[flare.id]?.channel) return
+
     const ch = supabase
       .channel(`chat:${flare.id}`)
       .on('broadcast', { event: 'msg' }, ({ payload }) => {
@@ -307,16 +310,24 @@ export const useStore = create((set, get) => ({
           return {
             conversations: {
               ...s.conversations,
-              [flare.id]: { ...conv, messages: [...conv.messages, payload], unread: isActive ? 0 : conv.unread + 1 }
+              [flare.id]: {
+                ...conv,
+                messages: [...conv.messages, payload],
+                unread: isActive ? 0 : conv.unread + 1
+              }
             }
           }
         })
       })
       .subscribe()
+
     set(s => ({
       conversations: {
         ...s.conversations,
-        [flare.id]: { ...(s.conversations[flare.id] || { flare, messages: [], unread: 0 }), channel: ch }
+        [flare.id]: {
+          ...(s.conversations[flare.id] || { flare, messages: [], unread: 0 }),
+          channel: ch
+        }
       }
     }))
   },
@@ -326,6 +337,7 @@ export const useStore = create((set, get) => ({
     if (!session || !text.trim()) return
     const conv = conversations[flareId]
     if (!conv?.channel) return
+
     const msg = {
       id: `${Date.now()}_${session.user.id}`,
       user_id: session.user.id,
@@ -336,56 +348,87 @@ export const useStore = create((set, get) => ({
     set(s => ({
       conversations: {
         ...s.conversations,
-        [flareId]: { ...s.conversations[flareId], messages: [...(s.conversations[flareId]?.messages || []), msg] }
+        [flareId]: {
+          ...s.conversations[flareId],
+          messages: [...(s.conversations[flareId]?.messages || []), msg]
+        }
       }
     }))
-    await conv.channel.send({ type: 'broadcast', event: 'msg', payload: msg })
+    try {
+      await conv.channel.send({ type: 'broadcast', event: 'msg', payload: msg })
+    } catch (_) {}
   },
 
   clearUnread: (flareId) => {
     set(s => ({
-      conversations: { ...s.conversations, [flareId]: { ...s.conversations[flareId], unread: 0 } }
+      conversations: {
+        ...s.conversations,
+        [flareId]: { ...s.conversations[flareId], unread: 0 }
+      }
     }))
   },
 
-  // ── Route / Distance (OSRM free API) ──────────────────────────────────────
+  // ── Routing (OSRM) ────────────────────────────────────────────────────────
   activeRoute: null,
   routeLoading: false,
 
   fetchRoute: async (destLat, destLng, mode = 'walking') => {
     const { position } = get()
     if (!position) return
+    // Store dest for mode-toggle re-fetch
+    lastRouteDest = { lat: destLat, lng: destLng }
     set({ routeLoading: true, activeRoute: null })
-    const profile = mode === 'cycling' ? 'bike' : 'foot'
-    const url = `https://router.project-osrm.org/route/v1/${profile}/${position.lng},${position.lat};${destLng},${destLat}?overview=full&geometries=geojson`
+    const osrmProfile = mode === 'cycling' ? 'bike' : 'foot'
+    const url = `https://router.project-osrm.org/route/v1/${osrmProfile}/${position.lng},${position.lat};${destLng},${destLat}?overview=full&geometries=geojson`
     try {
       const res = await fetch(url)
+      if (!res.ok) throw new Error(`OSRM ${res.status}`)
       const data = await res.json()
-      if (data.code !== 'Ok' || !data.routes?.length) throw new Error('No route')
+      if (data.code !== 'Ok' || !data.routes?.length) throw new Error('No route found')
       const route = data.routes[0]
       const coords = route.geometry.coordinates.map(([lng, lat]) => [lat, lng])
-      set({ activeRoute: { coords, distanceKm: (route.distance/1000).toFixed(1), durationMin: Math.ceil(route.duration/60), mode }, routeLoading: false })
-    } catch(e) { set({ routeLoading: false }) }
+      set({
+        activeRoute: {
+          coords,
+          distanceKm: (route.distance / 1000).toFixed(1),
+          durationMin: Math.ceil(route.duration / 60),
+          mode
+        },
+        routeLoading: false
+      })
+    } catch (e) {
+      console.warn('Route fetch failed:', e.message)
+      set({ routeLoading: false })
+    }
   },
 
-  clearRoute: () => set({ activeRoute: null }),
+  refetchRouteWithMode: (mode) => {
+    if (lastRouteDest) {
+      get().fetchRoute(lastRouteDest.lat, lastRouteDest.lng, mode)
+    }
+  },
+
+  clearRoute: () => {
+    lastRouteDest = null
+    set({ activeRoute: null })
+  },
 
   // ── Session lifecycle ─────────────────────────────────────────────────────
   startSession: async () => {
     get().startLocation()
-    const { geohashCell } = get()
-    if (geohashCell) await get().joinPresenceChannel(geohashCell)
+    // Join presence only once we have a geohash cell (may come from watchPosition callback)
+    const { geohashCell, session } = get()
+    if (geohashCell && session) await get().joinPresenceChannel(geohashCell)
     await get().fetchNearbyFlares()
 
-    // Refresh flares every 30s
-    get()._flareInterval = setInterval(() => get().fetchNearbyFlares(), 30000)
+    // Refresh flares every 30s — guard against double-interval
+    if (flareInterval) clearInterval(flareInterval)
+    flareInterval = setInterval(() => get().fetchNearbyFlares(), 30000)
   },
 
   stopSession: async () => {
     get().stopLocation()
     await get().leavePresenceChannel()
-    if (get()._flareInterval) clearInterval(get()._flareInterval)
-  },
-
-  _flareInterval: null
+    if (flareInterval) { clearInterval(flareInterval); flareInterval = null }
+  }
 }))
