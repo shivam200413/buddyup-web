@@ -3,6 +3,11 @@
 A hyper-local activity discovery app. Open it, appear on a live map, see who else is nearby and what they're doing. Drop a flare — a short-lived invite to join you for a run, a game, coffee, whatever. Close the app and you vanish instantly. No followers, no feed, no history.
 
 Built as a progressive web app with a real-time backend. Works in any mobile browser and installs to the home screen.
+---
+
+<img width="672" height="714" alt="Screenshot 2026-06-01 115045" src="https://github.com/user-attachments/assets/d7e69390-439d-460a-be30-27ce86a4eb8a" />
+<img width="1912" height="875" alt="Screenshot 2026-06-01 115232" src="https://github.com/user-attachments/assets/63fbf117-36f0-4f43-83d5-308d2a23afed" />
+<img width="1910" height="866" alt="Screenshot 2026-06-01 115247" src="https://github.com/user-attachments/assets/124ffb79-ff6e-4aa9-ab88-1071afc65cb6" />
 
 ---
 
